@@ -19,23 +19,31 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, Command
 from launch.actions import IncludeLaunchDescription, ExecuteProcess
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+# from launch_ros.actions import PushROSNamespace
+from launch_ros.actions import PushRosNamespace
+
 from launch.event_handlers import OnProcessExit
 from launch.conditions import IfCondition
 import launch.logging
+
+from launch.substitutions import PythonExpression
+from launch.substitutions import PathJoinSubstitution
+
+
 
 def generate_launch_description():
     ld = LaunchDescription()
 
     # Names and poses of the robots
     robots = [
-        {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
-        {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
-        {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
-        {'name': 'tb4', 'x_pose': '1.5', 'y_pose': '0.5', 'z_pose': 0.01},
+        {'name': 'tb21', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+        # {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
+        # {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+        # {'name': 'tb4', 'x_pose': '1.5', 'y_pose': '0.5', 'z_pose': 0.01},
         # ...
         # ...
         ]
@@ -78,18 +86,55 @@ def generate_launch_description():
         get_package_share_directory('turtlebot3_multi_robot'),
         'worlds', 'multi_robot_world.world')
 
-    gzserver_cmd = IncludeLaunchDescription(
+    # gzserver_cmd = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzserver.launch.py')
+    #     ),
+    #     launch_arguments={'world': world}.items(),
+    # )
+
+    # gzclient_cmd = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzclient.launch.py')
+    #     ),
+    # )
+
+    # gz_cmd = ExecuteProcess(
+    #         cmd=['gazebo', '--verbose', '-s', 'libgazebo_ros_factory.so','-s','libgazebo_ros_init.so',
+    #         '/home/jaeyong/ros2_ws/src/turtlebot3_multi_robot/worlds/multi_robot_world.world'
+    #         ],
+    #         output='screen'),
+
+    gz_cmd =  IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzserver.launch.py')
+            [os.path.join(get_package_share_directory("gazebo_ros"), "launch", "gazebo.launch.py")]
         ),
-        launch_arguments={'world': world}.items(),
     )
 
-    gzclient_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzclient.launch.py')
-        ),
+    DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true'),
+
+    gzserver_cmd = ExecuteProcess(
+        cmd=[
+            'gzserver',
+            '-s',
+            'libgazebo_ros_init.so',
+            '-s',
+            'libgazebo_ros_factory.so',
+            'worlds/multi_robot_world.world',
+        ],
+        cwd=[turtlebot3_multi_robot],
+        output='screen',
     )
+
+    gzclient_cmd = ExecuteProcess(
+        cmd=['gzclient'],
+        cwd=[turtlebot3_multi_robot],
+        output='screen',
+    )
+
 
     params_file = LaunchConfiguration('nav_params_file')
     declare_params_file_cmd = DeclareLaunchArgument(
@@ -105,6 +150,7 @@ def generate_launch_description():
     ld.add_action(declare_params_file_cmd)
     ld.add_action(gzserver_cmd)
     ld.add_action(gzclient_cmd)
+    # ld.add_action(gz_cmd)
  
     remappings = [('/tf', 'tf'),
                   ('/tf_static', 'tf_static')]
@@ -134,54 +180,82 @@ def generate_launch_description():
     # will get be published on root '/' namespace
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
+    xacro_file_path = os.path.join(turtlebot3_multi_robot, 'urdf', 'turtlebot3_waffle.urdf.xacro')
+
+    node = Node(package = "tf2_ros", 
+                    name='robot12',
+                    executable = "static_transform_publisher",
+                    arguments = ["0", "0", "0", "0", "0", "0", "odom", "map"],
+                    parameters=[{
+                        'use_sim_time': use_sim_time
+                        }]
+                    )
+
+    ld.add_action(node)
+
+
+
     last_action = None
     # Spawn turtlebot3 instances in gazebo
     for robot in robots:
+    
+        # namespace = '/' + robot['name']
+        namespace = [ '/' + robot['name']]
 
-        namespace = [ '/' + robot['name'] ]
-
-        # Create state publisher node for that instance
+        robot_prefix = robot['name']
+        robot_desc = Command(['xacro ', str(xacro_file_path), ' frame_prefix:=', robot_prefix, ' topic_prefix:=', robot_prefix])
+        
         turtlebot_state_publisher = Node(
             package='robot_state_publisher',
-            namespace=namespace,
             executable='robot_state_publisher',
+            name='robot_state_publisher',
             output='screen',
-            parameters=[{'use_sim_time': use_sim_time,
-                            'publish_frequency': 10.0}],
-            remappings=remappings,
-            arguments=[urdf],
+            namespace=robot_prefix,
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                # 'publish_frequency': 10.0,
+                'robot_description': robot_desc,
+                'frame_prefix': 
+                    PythonExpression(["'", robot_prefix, "/'"])
+                    # 'tb1/'
+            }],
         )
 
-        # Create spawn call
+        print(robot_prefix)
+        print("here2?")
         spawn_turtlebot3_burger = Node(
             package='gazebo_ros',
             executable='spawn_entity.py',
             arguments=[
-                '-file', os.path.join(turtlebot3_multi_robot,'models', 'turtlebot3_' + TURTLEBOT3_MODEL, 'model.sdf'),
-                '-entity', robot['name'],
-                '-robot_namespace', namespace,
-                '-x', robot['x_pose'], '-y', robot['y_pose'],
-                '-z', '0.01', '-Y', '0.0',
-                '-unpause',
+                '-entity', PathJoinSubstitution([robot_prefix, 'waffle']),
+                '-topic', PathJoinSubstitution([robot_prefix, 'robot_description']),
+                '-x', robot['x_pose'],
+                '-y', robot['y_pose'],
+                '-z', '0.01'
             ],
             output='screen',
         )
 
         bringup_cmd = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(nav_launch_dir, 'bringup_launch.py')),
-                    launch_arguments={  
-                                    'slam': 'False',
-                                    'namespace': namespace,
-                                    'use_namespace': 'True',
+                    # os.path.join(nav_launch_dir, 'bringup_launch.py')),
+                    os.path.join(nav_launch_dir, 'tb3_simulation_launch.py')),
+                    launch_arguments={
+                                    'use_namespace': 'true',
+                                    'namespace': robot_prefix,
                                     'map': '',
-                                    'map_server': 'False',
+                                    'use_sim_time': use_sim_time,
                                     'params_file': params_file,
                                     'default_bt_xml_filename': os.path.join(
                                         get_package_share_directory('nav2_bt_navigator'),
                                         'behavior_trees', 'navigate_w_replanning_and_recovery.xml'),
+                                    'slam': 'True',
                                     'autostart': 'true',
-                                    'use_sim_time': use_sim_time, 'log_level': 'warn'}.items()
+                                    'use_simulator': 'False',
+                                    'map_server': 'False',
+                                    'headless': 'False',
+                                    'use_robot_state_pub': 'true',
+                                    'log_level': 'warn'}.items()
                                     )
 
         if last_action is None:
@@ -196,7 +270,8 @@ def generate_launch_description():
             spawn_turtlebot3_event = RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=last_action,
-                    on_exit=[spawn_turtlebot3_burger,
+                    on_exit=[
+                            spawn_turtlebot3_burger,
                             turtlebot_state_publisher,
                             bringup_cmd],
                 )
@@ -206,6 +281,41 @@ def generate_launch_description():
 
         # Save last instance for next RegisterEventHandler
         last_action = spawn_turtlebot3_burger
+
+        node = Node(package = "tf2_ros", 
+                    name='robot1',
+                    executable = "static_transform_publisher",
+                    arguments = ["0", "0", "0", "0", "0", "0", "map", robot['name']+"/odom"],
+                    parameters=[{
+                        'use_sim_time': use_sim_time
+                        }]
+                    )
+
+        ld.add_action(node)
+
+        node = Node(package = "tf2_ros", 
+                    name='robot13',
+                    executable = "static_transform_publisher",
+                    arguments = ["0", "0", "0", "0", "0", "0", "odom", robot['name']+"/map"],
+                    parameters=[{
+                        'use_sim_time': use_sim_time
+                        }]
+                    )
+
+        ld.add_action(node)
+
+        # node2 = Node(package = "tf2_ros", 
+        #             name='robot21',
+        #             executable = "static_transform_publisher",
+        #             arguments = ["0", "0", "0", "0", "0", "0", "tb1/map", "tb1/base_scan"],
+        #             parameters=[{
+        #                 'use_sim_time': True
+        #                 }]
+        #             )
+
+        # ld.add_action(node2)
+
+        
     ######################
 
     ######################
@@ -220,7 +330,7 @@ def generate_launch_description():
             ', z: 0.1}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0000000}}, }}'
 
         initial_pose_cmd = ExecuteProcess(
-            cmd=['ros2', 'topic', 'pub', '-t', '3', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
+            cmd=['ros2', 'topic', 'pub', '-1', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
                 'geometry_msgs/PoseWithCovarianceStamped', message],
             output='screen'
         )
@@ -253,8 +363,10 @@ def generate_launch_description():
         # Perform next rviz and other node instantiation after the previous intialpose request done
         last_action = initial_pose_cmd
 
-        ld.add_action(post_spawn_event)
-        ld.add_action(declare_params_file_cmd)
+        # ld.add_action(post_spawn_event)
+        # ld.add_action(declare_params_file_cmd)
+
+
     ######################
 
     return ld

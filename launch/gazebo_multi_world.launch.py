@@ -105,7 +105,7 @@ def generate_launch_description():
                 executable="spawn_entity.py",
                 arguments=[
                     "-file",
-                    os.path.join(turtlebot3_multi_robot,'models', 'turtlebot3_' + TURTLEBOT3_MODEL, 'model.sdf'),
+                    os.path.join(turtlebot3_multi_robot,"models", "turtlebot3_" + TURTLEBOT3_MODEL, "model.sdf"),
                     "-entity",
                     name,
                     "-robot_namespace",
